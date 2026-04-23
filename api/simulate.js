@@ -104,6 +104,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ prices });
   } catch (err) {
-    return res.status(500).json({ error: "Erreur interne du proxy", detail: err.message });
+    return res.status(500).json({ error: "Erreur interne du proxy", detail: err.message, cause: err.cause?.message ?? null });
   }
 }
