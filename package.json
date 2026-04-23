@@ -1,0 +1,6 @@
+{
+  "name": "leocare-proxy",
+  "version": "1.0.0",
+  "description": "Proxy léger pour l'API de simulation Leocare — utilisé par le GPT App",
+  "private": true
+}
