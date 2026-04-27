@@ -12,98 +12,111 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { birthdate, drivingLicenceAcquisitionDate, registrationDate } =
-    req.body;
+  const { date_naissance, date_permis, date_mec, numero_formule } = req.body;
 
-  if (!birthdate || !drivingLicenceAcquisitionDate || !registrationDate) {
+  if (!date_naissance || !date_permis || !date_mec || !numero_formule) {
     return res.status(400).json({
-      error:
-        "Champs requis manquants : birthdate, drivingLicenceAcquisitionDate, registrationDate",
+      error: "Champs requis manquants : date_naissance, date_permis, date_mec, numero_formule",
     });
   }
 
-  // Body complet avec valeurs par défaut + 3 valeurs dynamiques
-  const leocareBody = {
-    declaration: {
-      vehicle: {
-        id: "DC03157",
-        make: { id: "DC", label: "DACIA" },
-        model: { id: "03", label: "DUSTER", makeId: "DC" },
-        version: {
-          id: "157",
-          label: "1.5 BLUE DCI 95 (PA : 5 cv)",
-          modelId: "03",
-        },
-        sraClass: "E",
-        sraGroup: "29",
-        registrationDate: registrationDate,
-      },
-      parkingAddress: { town: "Lannion", zipCode: "22300" },
-      parkingType: { type: "GARAGE" },
-      insuranceHistory: {
-        convictedResistingArrestOrNoInsurance: false,
-        convictedAlcoholOrDrug: false,
-        licenseCanceledOrSuspended: false,
-        contractCanceled: false,
-      },
-      birthdate: birthdate,
-      drivingLicenceAcquisitionDate: drivingLicenceAcquisitionDate,
-      carUsage: "PRIVATE",
-      driverCsp: "FONCTIONNAIRE_A",
-      isDriverSedentary: true,
-      isLoa: false,
-      noclaimsBonus: 0.9,
-      numberOfMaterialAccidents: 0,
-      numberOfPersonalAccidents: 0,
-      numberOfBrokenGlassAccidents: 0,
-      numberOfFireAccidents: 0,
-      numberOfThefts: 0,
-      numberOfNotResponsibleMaterialAccidents: 0,
-      numberOfNotResponsiblePersonalAccidents: 0,
-      numberOfOtherClaims: 0,
-      insuranceSeniorityInMonth: { type: "EQUAL", value: 36 },
-    },
-    productType: "CONTRACT_TYPE_CAR_ESTIMATE",
-    state: "ESTIMATION_REQUESTED",
-    businessPartner: { businessPartnerName: "ALEOC003" },
-    anonymousUserkey: "69e8ebcc109a35a4834d6538",
+  const FORMULE_MAP = {
+    F1: "Tiers",
+    F2: "Tiers+",
+    F3: "Tiers+ Confort",
+    F4: "Tous risques",
   };
+
+  if (!FORMULE_MAP[numero_formule]) {
+    return res.status(400).json({
+      error: "numero_formule invalide. Valeurs acceptées : F1, F2, F3, F4",
+    });
+  }
+
+  const coherentBody = {
+    request_data: {
+      inputs: {
+        date_naissance_cp: date_naissance,
+        date_permis_cp: date_permis,
+        date_mec: date_mec,
+        numero_formule: numero_formule,
+        fractionnement: "ANNUEL",
+        crmbonus: 0.5,
+        cp_conducteur: "75001",
+        marque: "RENAULT",
+        modele: "CLIO",
+        puissance_fiscale: 5,
+        energie: "ESSENCE",
+        usage_vehicule: "VP",
+        valeur_vehicule: 10000,
+        km_annuel: 10000,
+        stationnement: "GARAGE",
+        conduite_exclusive: false,
+        jeune_conducteur: false,
+        bonus_malus: 1,
+        sinistres_3ans: 0,
+        suspension_permis: false,
+        annulation_assurance: false,
+        conducteur_secondaire: false,
+      },
+    },
+    request_meta: {
+      version_id: "draft",
+      call_purpose: "Leocare GPT simulation",
+      source_system: "vercel-proxy",
+      correlation_id: `gpt-${Date.now()}`,
+    },
+  };
+
+  const SYNTHETIC_KEY = process.env.COHERENT_SYNTHETIC_KEY;
 
   try {
     const response = await fetch(
-      "https://api-frontoffice.leocare.eu/api/v5/simulations/price",
+      "https://excel.uat.eu.coherent.global/leocare/api/v3/folders/Tarification%20CMAM/services/Calculette%20CMAM%20V2%20-%20version%20Coherent/execute",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(leocareBody),
+        headers: {
+          "Content-Type": "application/json",
+          "x-synthetic-key": SYNTHETIC_KEY,
+          "x-tenant-name": "leocare",
+        },
+        body: JSON.stringify(coherentBody),
       }
     );
 
     if (!response.ok) {
-      return res
-        .status(502)
-        .json({ error: `Erreur API Leocare : ${response.status}` });
+      const errText = await response.text();
+      return res.status(502).json({
+        error: `Erreur API Coherent : ${response.status}`,
+        detail: errText,
+      });
     }
 
     const data = await response.json();
+    const outputs = data?.response_data?.outputs ?? {};
 
-    // Extraire uniquement les prix par formule
-    const options = data?.estimation?.options ?? [];
-    const formules = ["Tiers", "Tiers+", "Tous risques"];
-
-    const prices = {};
-    for (const formule of formules) {
-      const option = options.find((o) => o.name === formule);
-      if (option) {
-        prices[formule] = {
-          monthly: Math.round(option.monthly.price * 100) / 100,
-          yearly: Math.round(option.yearly.price * 100) / 100,
-        };
-      }
+    const etat = outputs.etat_du_profil ?? "";
+    if (!etat.includes("OK")) {
+      return res.status(200).json({
+        eligible: false,
+        message: `Profil non éligible : ${etat}`,
+      });
     }
 
-    return res.status(200).json({ prices });
+    const prixAnnuel = outputs.TTC_final_si_etat_OK ?? outputs.TTC_final ?? null;
+    const prixMensuel = prixAnnuel !== null ? Math.round((prixAnnuel / 12) * 100) / 100 : null;
+
+    return res.status(200).json({
+      eligible: true,
+      formule: FORMULE_MAP[numero_formule],
+      prix_mensuel: prixMensuel,
+      prix_annuel: prixAnnuel !== null ? Math.round(prixAnnuel * 100) / 100 : null,
+    });
   } catch (err) {
-    return res.status(500).json({ error: "Erreur interne du proxy", detail: err.message, cause: err.cause?.message ?? null });
+    return res.status(500).json({
+      error: "Erreur interne du proxy",
+      detail: err.message,
+      cause: err.cause?.message ?? null,
+    });
   }
 }
